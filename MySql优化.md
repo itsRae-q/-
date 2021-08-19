@@ -229,3 +229,54 @@ explain select * from inbound_v2_tab where supplier=846005;     (2)
     
     8. 连接查询时需要在关联字段上建索引，且保证类型一致，避免索引失效
    
+
+## 倒序索引（Descending Indexes）
+    假设表t中字段a,b建立联合索引idx_a_b, 进行单字段排序时，会找到联合索引树中最右边的节点，然后依次向左遍历获取结果
+    
+```
+select a,b from t order by a desc;
+```
+![image](https://user-images.githubusercontent.com/46525758/129996334-11e50427-8c82-4f23-9258-63eb4b8729bb.png)
+
+    如果创建的是升序索引，那么对于组合字段的排序，会有以下情况：
+    
+```sql
+explain select inbound_id, sku_id from inbound_sku_list_v2_tab order by inbound_id asc , sku_id asc ;
+```
+![image](https://user-images.githubusercontent.com/46525758/129996380-b566ea3a-54b3-4f9a-ba87-51bf85c12339.png)
+
+    此时不需要filesort,因为联合索引按照Inbound_id升序，且inbound_id一定时sku_id升序排列的
+    
+ ```sql
+explain select inbound_id, sku_id from inbound_sku_list_v2_tab order by inbound_id desc , sku_id desc ;
+```
+![image](https://user-images.githubusercontent.com/46525758/129996415-c1ddf9ec-2d75-4705-89a0-e451b1a59f16.png)
+    
+    此时也不需要filesort，找到最后一个节点从右向左遍历极即可
+
+ ```sql
+explain select inbound_id, sku_id from inbound_sku_list_v2_tab order by inbound_id asc , sku_id desc ;
+```
+![image](https://user-images.githubusercontent.com/46525758/129996449-2321458e-f6be-4bc5-b999-c5baf605433b.png)
+
+    此时需要filesort，因为inbound_id确定时，sku_id不是倒序的
+    
+    如果建立倒序索引则可以避免多字段排序顺序不同时需要filesort的情况
+    
+[倒序索引](https://dev.mysql.com/doc/refman/8.0/en/descending-indexes.html)
+![image](https://user-images.githubusercontent.com/46525758/129996481-7e765950-9f78-4880-adfe-34f8755331dd.png)
+
+    mysql8.0版本支持该功能
+    
+![image](https://user-images.githubusercontent.com/46525758/129996527-3bd54756-82df-49d1-a797-fa65a27144db.png)
+
+    对于不支持倒序索引的可以怎么处理呢？
+    例如:
+```sql
+explain select inbound_id, sku_id from inbound_sku_list_v2_tab order by inbound_id asc , sku_id desc ;
+```
+    1.先写sql按inbound_id,sku_id升序捞数据
+    2.构造空栈，写入第一条数据
+    3.读入下一行，
+    a.如果新一行中a值与上一行相同，将新一行入栈；
+    b.如果新一行中a值与上一行不同，则将栈中的所有数据行依次出栈并输出，直到栈清空；然后新一行入栈。
